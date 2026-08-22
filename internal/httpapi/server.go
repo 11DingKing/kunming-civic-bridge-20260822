@@ -24,6 +24,10 @@ func (s *Server) Routes() http.Handler {
 	m.HandleFunc("/readyz", s.ready)
 	m.HandleFunc("/api/v1/suggestions", s.suggestions)
 	m.HandleFunc("/api/v1/suggestions/", s.suggestion)
+	m.HandleFunc("/api/v1/reviews", s.reviews)
+	m.HandleFunc("/api/v1/assignments", s.assignments)
+	m.HandleFunc("/api/v1/responses", s.responses)
+	m.HandleFunc("/api/v1/feedback", s.feedback)
 	return requestID(recoverer(m))
 }
 func (s *Server) ready(w http.ResponseWriter, r *http.Request) {
@@ -78,6 +82,87 @@ func (s *Server) suggestion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	write(w, 405, nil)
+}
+
+type reviewRequest struct{ SuggestionID, ActorID, Decision, Note string }
+
+func (s *Server) reviews(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		write(w, 405, nil)
+		return
+	}
+	var in reviewRequest
+	if json.NewDecoder(r.Body).Decode(&in) != nil {
+		problem(w, domain.ErrInvalid)
+		return
+	}
+	x, e := s.Svc.Review(r.Context(), in.SuggestionID, in.ActorID, in.Decision, in.Note, r.Header.Get("X-Request-ID"))
+	if e != nil {
+		problem(w, e)
+		return
+	}
+	write(w, 200, x)
+}
+
+type assignmentRequest struct{ SuggestionID, ActorID, DepartmentID string }
+
+func (s *Server) assignments(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		write(w, 405, nil)
+		return
+	}
+	var in assignmentRequest
+	if json.NewDecoder(r.Body).Decode(&in) != nil {
+		problem(w, domain.ErrInvalid)
+		return
+	}
+	if e := s.Svc.Assign(r.Context(), in.SuggestionID, in.ActorID, in.DepartmentID, r.Header.Get("X-Request-ID")); e != nil {
+		problem(w, e)
+		return
+	}
+	write(w, 202, map[string]string{"status": "assigned"})
+}
+
+type responseRequest struct{ SuggestionID, ActorID, Body string }
+
+func (s *Server) responses(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		write(w, 405, nil)
+		return
+	}
+	var in responseRequest
+	if json.NewDecoder(r.Body).Decode(&in) != nil {
+		problem(w, domain.ErrInvalid)
+		return
+	}
+	x, e := s.Svc.DraftResponse(r.Context(), in.SuggestionID, in.ActorID, in.Body, r.Header.Get("X-Request-ID"))
+	if e != nil {
+		problem(w, e)
+		return
+	}
+	write(w, 201, x)
+}
+
+type feedbackRequest struct {
+	SuggestionID, AuthorID, Comment string
+	Rating                          int
+}
+
+func (s *Server) feedback(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		write(w, 405, nil)
+		return
+	}
+	var in feedbackRequest
+	if json.NewDecoder(r.Body).Decode(&in) != nil {
+		problem(w, domain.ErrInvalid)
+		return
+	}
+	if e := s.Svc.AddFeedback(r.Context(), in.SuggestionID, in.AuthorID, in.Rating, in.Comment, r.Header.Get("X-Request-ID")); e != nil {
+		problem(w, e)
+		return
+	}
+	write(w, 201, map[string]string{"status": "recorded"})
 }
 func write(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
