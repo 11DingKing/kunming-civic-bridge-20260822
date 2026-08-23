@@ -3,6 +3,8 @@ package service
 import (
 	"context"
 	"database/sql"
+	"errors"
+	"github.com/11DingKing/kunming-civic-bridge/internal/domain"
 	"github.com/11DingKing/kunming-civic-bridge/internal/platform"
 	"github.com/11DingKing/kunming-civic-bridge/internal/repository"
 	"testing"
@@ -40,5 +42,36 @@ func TestWorkflowClaimAndReopen(t *testing.T) {
 	var status string
 	if e = db.QueryRow(`SELECT status FROM suggestions WHERE id='s'`).Scan(&status); e != nil || status != "reopened" {
 		t.Fatalf("status=%s err=%v", status, e)
+	}
+}
+
+func TestReopenServiceApplyIsIdempotent(t *testing.T) {
+	db := workflowDB(t)
+	defer db.Close()
+	now := time.Date(2026, 8, 19, 0, 0, 0, 0, time.UTC)
+	_, e := db.Exec(`INSERT INTO suggestions(id,campaign_id,author_id,title,body,scope,status,version,created_at,updated_at) VALUES('s','c','u','标题','正文','云南/昆明/西山/马街','responded',2,?,?);INSERT INTO responses(id,suggestion_id,author_id,body,status,created_at) VALUES('r','s','u','long response body here','published',?)`, now, now, now)
+	if e != nil {
+		t.Fatal(e)
+	}
+	store := repository.ReopenStore{DB: db}
+	if e = store.Request(context.Background(), domain.ReopenRequest{SuggestionID: "s", AuthorID: "u", Reason: "未解决", RequestedAt: now}); e != nil {
+		t.Fatal(e)
+	}
+	svc := ReopenService{DB: db, Store: store, Now: func() time.Time { return now }}
+	if e = svc.Apply(context.Background(), "s"); e != nil {
+		t.Fatalf("first apply: %v", e)
+	}
+	var status string
+	var version int
+	if e = db.QueryRow(`SELECT status,version FROM suggestions WHERE id='s'`).Scan(&status, &version); e != nil || status != "reopened" || version != 3 {
+		t.Fatalf("status=%s version=%d err=%v", status, version, e)
+	}
+	if e = svc.Apply(context.Background(), "s"); !errors.Is(e, domain.ErrConflict) {
+		t.Fatalf("second apply want conflict, got %v", e)
+	}
+	var status2 string
+	var version2 int
+	if e = db.QueryRow(`SELECT status,version FROM suggestions WHERE id='s'`).Scan(&status2, &version2); e != nil || status2 != "reopened" || version2 != 3 {
+		t.Fatalf("after second apply: status=%s version=%d err=%v", status2, version2, e)
 	}
 }

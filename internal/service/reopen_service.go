@@ -34,6 +34,13 @@ func (s ReopenService) Apply(ctx context.Context, id string) error {
 	if !r.WithinWindow(now.Add(-24*time.Hour), now) {
 		return domain.ErrExpired
 	}
-	_, e = s.DB.ExecContext(ctx, `UPDATE suggestions SET status='reopened',version=version+1,updated_at=? WHERE id=?`, now.Format(time.RFC3339Nano), id)
+	var status string
+	if e = s.DB.QueryRowContext(ctx, `SELECT status FROM suggestions WHERE id=?`, id).Scan(&status); e != nil {
+		return e
+	}
+	if !r.CanApply(domain.SuggestionStatus(status)) {
+		return fmt.Errorf("%w: reopen status", domain.ErrConflict)
+	}
+	_, e = s.DB.ExecContext(ctx, `UPDATE suggestions SET status='reopened',version=version+1,updated_at=? WHERE id=? AND status=?`, now.Format(time.RFC3339Nano), id, status)
 	return e
 }
