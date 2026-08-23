@@ -26,8 +26,9 @@ func (w Workflow) ClaimAssignment(ctx context.Context, suggestion, operator, tok
 	}
 	defer tx.Rollback()
 	var id, status, oldToken string
+	var version int
 	var oldUntil sql.NullString
-	e = tx.QueryRowContext(ctx, `SELECT id,status,COALESCE(lease_token,''),lease_until FROM assignments WHERE suggestion_id=? ORDER BY assigned_at DESC LIMIT 1`, suggestion).Scan(&id, &status, &oldToken, &oldUntil)
+	e = tx.QueryRowContext(ctx, `SELECT id,status,COALESCE(lease_token,''),lease_until,version FROM assignments WHERE suggestion_id=? ORDER BY assigned_at DESC LIMIT 1`, suggestion).Scan(&id, &status, &oldToken, &oldUntil, &version)
 	if e == sql.ErrNoRows {
 		return domain.ErrNotFound
 	}
@@ -42,9 +43,12 @@ func (w Workflow) ClaimAssignment(ctx context.Context, suggestion, operator, tok
 		return domain.ErrConflict
 	}
 	leaseUntil := now.Add(lease)
-	result, e := tx.ExecContext(ctx, `UPDATE assignments SET status='claimed',assignee_id=?,lease_token=?,lease_until=?,version=version+1 WHERE id=? AND version=(SELECT version FROM assignments WHERE id=?)`, operator, token, leaseUntil.Format(time.RFC3339Nano), id, id)
+	// Guard against concurrent claims with optimistic versioning: the UPDATE only
+	// matches the version read above, so the second concurrent writer affects zero
+	// rows and is reported as a conflict instead of silently overwriting the winner.
+	result, e := tx.ExecContext(ctx, `UPDATE assignments SET status='claimed',assignee_id=?,lease_token=?,lease_until=?,version=version+1 WHERE id=? AND version=?`, operator, token, leaseUntil.Format(time.RFC3339Nano), id, version)
 	if e != nil {
-		return e
+		return platform.TranslateSQLiteBusy(e)
 	}
 	n, _ := result.RowsAffected()
 	if n != 1 {

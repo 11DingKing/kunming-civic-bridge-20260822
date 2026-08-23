@@ -41,7 +41,7 @@ func (a AssignmentQueryStore) Get(ctx context.Context, id string) (AssignmentRec
 	return x, nil
 }
 func (a AssignmentQueryStore) Claim(ctx context.Context, id, owner, token string, until time.Time, version int) error {
-	res, e := a.DB.ExecContext(ctx, `UPDATE assignments SET status='claimed',assignee_id=?,lease_token=?,lease_until=?,version=version+1 WHERE id=?`, owner, token, until.Format(time.RFC3339Nano), id)
+	res, e := a.DB.ExecContext(ctx, `UPDATE assignments SET status='claimed',assignee_id=?,lease_token=?,lease_until=?,version=version+1 WHERE id=? AND version=?`, owner, token, until.Format(time.RFC3339Nano), id, version)
 	if e != nil {
 		return e
 	}
