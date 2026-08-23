@@ -39,6 +39,26 @@ func TestIntakeServiceSubmit(t *testing.T) {
 		t.Fatal("creation event missing")
 	}
 }
+func TestIntakeServiceSubmitRollsBackOnEventFailure(t *testing.T) {
+	db := workflowSeed(t)
+	defer db.Close()
+	now := time.Date(2026, 8, 19, 0, 0, 0, 0, time.UTC)
+	db.Exec(`INSERT INTO campaigns(id,name,starts_at,ends_at,status,created_at) VALUES('c','活动',?,?, 'open',?)`, now.Add(-time.Hour).Format(time.RFC3339Nano), now.Add(time.Hour).Format(time.RFC3339Nano), now.Format(time.RFC3339Nano))
+	// Simulate the creation event write failing: drop the events table so the
+	// second INSERT inside the transaction must fail.
+	if _, e := db.Exec(`DROP TABLE suggestion_events`); e != nil {
+		t.Fatal(e)
+	}
+	s := IntakeService{DB: db, Campaigns: repository.CampaignQueryStore{DB: db}, Points: repository.IntakePointStore{DB: db}, Now: func() time.Time { return now }}
+	if _, e := s.Submit(context.Background(), domain.SuggestionDraft{CampaignID: "c", AuthorID: "u", IntakePointID: "p", Title: "建议标题", Body: "建议内容足够长", Scope: "云南/昆明/西山/马街", Mode: domain.ModePoint}, "point"); e == nil {
+		t.Fatal("expected submit to fail when event write fails")
+	}
+	var suggestions int
+	db.QueryRow(`SELECT COUNT(*) FROM suggestions`).Scan(&suggestions)
+	if suggestions != 0 {
+		t.Fatalf("orphan suggestion left behind: %d", suggestions)
+	}
+}
 func TestQueryServiceFiltering(t *testing.T) {
 	db := workflowSeed(t)
 	defer db.Close()

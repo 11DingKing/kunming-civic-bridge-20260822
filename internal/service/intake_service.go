@@ -47,11 +47,11 @@ func (i IntakeService) Submit(ctx context.Context, d domain.SuggestionDraft, req
 	if e != nil {
 		return x, e
 	}
-	if e = tx.Commit(); e != nil {
+	_, e = tx.ExecContext(ctx, `INSERT INTO suggestion_events(id,suggestion_id,from_status,to_status,actor_id,note,created_at) VALUES(?,?,?,?,?,?,?)`, platform.ID(), x.ID, "", string(domain.StatusDraft), x.AuthorID, request, now.Format(time.RFC3339Nano))
+	if e != nil {
 		return x, e
 	}
-	_, e = i.DB.ExecContext(ctx, `INSERT INTO suggestion_events(id,suggestion_id,from_status,to_status,actor_id,note,created_at) VALUES(?,?,?,?,?,?,?)`, platform.ID(), x.ID, "", string(domain.StatusDraft), x.AuthorID, request, now.Format(time.RFC3339Nano))
-	if e != nil {
+	if e = tx.Commit(); e != nil {
 		return x, e
 	}
 	return x, nil
