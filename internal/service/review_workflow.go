@@ -42,7 +42,7 @@ func (w ReviewWorkflow) Complete(ctx context.Context, suggestion, actor string, 
 	if e = tx.QueryRowContext(ctx, `SELECT version FROM suggestions WHERE id=?`, suggestion).Scan(&version); e != nil {
 		return e
 	}
-	res, e := tx.ExecContext(ctx, `UPDATE suggestions SET status=?,version=version+1,updated_at=? WHERE id=?`, to, w.Now().Format(time.RFC3339Nano), suggestion)
+	res, e := tx.ExecContext(ctx, `UPDATE suggestions SET status=?,version=version+1,updated_at=? WHERE id=? AND status=? AND version=?`, to, w.Now().Format(time.RFC3339Nano), suggestion, domain.StatusSubmitted, version)
 	if e != nil {
 		return e
 	}
@@ -50,11 +50,10 @@ func (w ReviewWorkflow) Complete(ctx context.Context, suggestion, actor string, 
 	if n != 1 {
 		return domain.ErrConflict
 	}
-	if _, e = tx.ExecContext(ctx, `UPDATE reviews SET reviewer_id=?,decision=?,note=?,version=version+1 WHERE suggestion_id=?`, actor, decision, note, suggestion); e != nil {
+	if _, e = tx.ExecContext(ctx, `INSERT INTO suggestion_events(id,suggestion_id,from_status,to_status,actor_id,note,created_at) VALUES(lower(hex(randomblob(16))),?,?,?,?,?,?)`, suggestion, string(domain.StatusSubmitted), string(to), actor, note, w.Now().Format(time.RFC3339Nano)); e != nil {
 		return e
 	}
-	_, e = tx.ExecContext(ctx, `INSERT INTO suggestion_events(id,suggestion_id,from_status,to_status,actor_id,note,created_at) VALUES(lower(hex(randomblob(16))),?,?,?,?,?,?)`, suggestion, string(domain.StatusSubmitted), string(to), actor, note, w.Now().Format(time.RFC3339Nano))
-	if e != nil {
+	if _, e = tx.ExecContext(ctx, `UPDATE reviews SET reviewer_id=?,decision=?,note=?,version=version+1 WHERE suggestion_id=? AND decision='claimed'`, actor, decision, note, suggestion); e != nil {
 		return e
 	}
 	return tx.Commit()
