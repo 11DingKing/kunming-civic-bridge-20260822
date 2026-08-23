@@ -22,14 +22,24 @@ func (j JobStore) Claim(ctx context.Context, now time.Time, lease time.Duration)
 		return "", "", "", e
 	}
 	defer tx.Rollback()
+	nowStr := now.Format(time.RFC3339Nano)
+	// A running job still inside its lease is owned by another worker and must
+	// not be re-claimed; only pending jobs and running jobs whose lease has
+	// expired are eligible. The UPDATE re-checks the same condition so that a
+	// concurrent claim on the same row loses atomically.
 	var id, kind, payload string
-	e = tx.QueryRowContext(ctx, `SELECT id,kind,payload FROM jobs WHERE status IN ('pending','running') AND run_after<=? ORDER BY run_after LIMIT 1`, now.Format(time.RFC3339Nano)).Scan(&id, &kind, &payload)
+	e = tx.QueryRowContext(ctx, `SELECT id,kind,payload FROM jobs WHERE run_after<=? AND (status='pending' OR (status='running' AND (lease_until IS NULL OR lease_until<=?))) ORDER BY run_after LIMIT 1`, nowStr, nowStr).Scan(&id, &kind, &payload)
 	if e != nil {
 		return "", "", "", e
 	}
 	until := now.Add(lease).Format(time.RFC3339Nano)
-	if _, e = tx.ExecContext(ctx, `UPDATE jobs SET status='running',lease_until=?,updated_at=? WHERE id=?`, until, now.Format(time.RFC3339Nano), id); e != nil {
+	res, e := tx.ExecContext(ctx, `UPDATE jobs SET status='running',lease_until=?,updated_at=? WHERE id=? AND (status='pending' OR (status='running' AND (lease_until IS NULL OR lease_until<=?)))`, until, nowStr, id, nowStr)
+	if e != nil {
 		return "", "", "", e
+	}
+	n, _ := res.RowsAffected()
+	if n != 1 {
+		return "", "", "", domain.ErrConflict
 	}
 	if e = tx.Commit(); e != nil {
 		return "", "", "", e
