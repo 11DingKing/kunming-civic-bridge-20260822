@@ -12,14 +12,11 @@ import (
 type ReviewStore struct{ DB *sql.DB }
 
 func (r ReviewStore) Claim(ctx context.Context, suggestion, actor string, version int) error {
-	var decision string
-	if e := r.DB.QueryRowContext(ctx, `SELECT decision FROM reviews WHERE suggestion_id=?`, suggestion).Scan(&decision); e != nil {
-		return e
-	}
-	if decision != "unassigned" {
-		return domain.ErrConflict
-	}
-	res, e := r.DB.ExecContext(ctx, `UPDATE reviews SET reviewer_id=?,decision='claimed',version=version+1 WHERE suggestion_id=?`, actor, suggestion)
+	// Atomic compare-and-set: the claim only succeeds when the review is still
+	// unassigned at the expected version. The WHERE clause is the sole arbiter of
+	// ownership, so two concurrent claims cannot both succeed: the first commits the
+	// version bump and the second matches zero rows and returns a conflict.
+	res, e := r.DB.ExecContext(ctx, `UPDATE reviews SET reviewer_id=?,decision='claimed',version=version+1 WHERE suggestion_id=? AND decision='unassigned' AND version=?`, actor, suggestion, version)
 	if e != nil {
 		return e
 	}
